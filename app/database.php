@@ -234,11 +234,11 @@ function daily_summary(PDO $pdo, string $date): array
     $stmt->execute([':date' => $date]);
     $summary = $stmt->fetch();
 
-    $stmtProducts = $pdo->prepare('SELECT product_name, SUM(quantity) as qty, SUM(total) as amount
+    $stmtProducts = $pdo->prepare('SELECT si.product_name, SUM(si.quantity) as qty, SUM(si.total) as amount
         FROM sale_items si
         JOIN sales s ON s.id = si.sale_id
         WHERE DATE(s.created_at) = :date
-        GROUP BY product_name
+        GROUP BY si.product_name
         ORDER BY qty DESC
         LIMIT 5');
     $stmtProducts->execute([':date' => $date]);
