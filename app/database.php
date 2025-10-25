@@ -1,15 +1,68 @@
 <?php
 
+function database_config(): array
+{
+    $defaults = [
+        'host' => '127.0.0.1',
+        'port' => '3306',
+        'name' => 'kasir',
+        'user' => 'root',
+        'pass' => '',
+    ];
+
+    $configFile = __DIR__ . '/../config/database.php';
+    if (file_exists($configFile)) {
+        $custom = require $configFile;
+        if (is_array($custom)) {
+            $defaults = array_merge($defaults, array_intersect_key($custom, $defaults));
+        }
+    }
+
+    $envMap = [
+        'host' => getenv('DB_HOST') ?: null,
+        'port' => getenv('DB_PORT') ?: null,
+        'name' => getenv('DB_NAME') ?: null,
+        'user' => getenv('DB_USER') ?: null,
+        'pass' => getenv('DB_PASS'),
+    ];
+
+    foreach ($envMap as $key => $value) {
+        if ($value !== null && $value !== false) {
+            $defaults[$key] = $value;
+        }
+    }
+
+    return $defaults;
+}
+
 function get_connection(): PDO
 {
     static $pdo = null;
     if ($pdo === null) {
-        $path = __DIR__ . '/../data/kasir.sqlite';
-        $pdo = new PDO('sqlite:' . $path, null, null, [
+        $config = database_config();
+        $dsnBase = sprintf('mysql:host=%s;port=%s;charset=utf8mb4', $config['host'], $config['port']);
+        $dsn = $dsnBase . ';dbname=' . $config['name'];
+        $options = [
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-        ]);
-        $pdo->exec('PRAGMA foreign_keys = ON');
+            PDO::ATTR_EMULATE_PREPARES => false,
+        ];
+
+        try {
+            $pdo = new PDO($dsn, $config['user'], $config['pass'], $options);
+        } catch (PDOException $e) {
+            if (strpos($e->getMessage(), 'Unknown database') !== false) {
+                $tmpPdo = new PDO($dsnBase, $config['user'], $config['pass'], $options);
+                $tmpPdo->exec(sprintf(
+                    'CREATE DATABASE IF NOT EXISTS `%s` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci',
+                    str_replace('`', '``', $config['name'])
+                ));
+                $tmpPdo = null;
+                $pdo = new PDO($dsn, $config['user'], $config['pass'], $options);
+            } else {
+                throw $e;
+            }
+        }
     }
 
     return $pdo;
@@ -18,37 +71,38 @@ function get_connection(): PDO
 function ensure_schema(PDO $pdo): void
 {
     $pdo->exec('CREATE TABLE IF NOT EXISTS products (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        price INTEGER NOT NULL,
-        sku TEXT DEFAULT NULL,
-        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )');
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        price INT UNSIGNED NOT NULL,
+        sku VARCHAR(100) DEFAULT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci');
 
     $pdo->exec('CREATE TABLE IF NOT EXISTS sales (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        invoice_number TEXT NOT NULL,
-        customer_name TEXT DEFAULT NULL,
-        payment_method TEXT DEFAULT NULL,
-        paid_amount INTEGER NOT NULL,
-        change_amount INTEGER NOT NULL,
-        subtotal INTEGER NOT NULL,
-        tax_amount INTEGER NOT NULL,
-        total INTEGER NOT NULL,
-        notes TEXT DEFAULT NULL,
-        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )');
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        invoice_number VARCHAR(100) NOT NULL,
+        customer_name VARCHAR(255) DEFAULT NULL,
+        payment_method VARCHAR(100) DEFAULT NULL,
+        paid_amount INT UNSIGNED NOT NULL,
+        change_amount INT NOT NULL,
+        subtotal INT UNSIGNED NOT NULL,
+        tax_amount INT UNSIGNED NOT NULL,
+        total INT UNSIGNED NOT NULL,
+        notes TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci');
 
     $pdo->exec('CREATE TABLE IF NOT EXISTS sale_items (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        sale_id INTEGER NOT NULL,
-        product_id INTEGER,
-        product_name TEXT NOT NULL,
-        quantity INTEGER NOT NULL,
-        price INTEGER NOT NULL,
-        total INTEGER NOT NULL,
-        FOREIGN KEY(sale_id) REFERENCES sales(id) ON DELETE CASCADE
-    )');
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        sale_id INT UNSIGNED NOT NULL,
+        product_id INT UNSIGNED DEFAULT NULL,
+        product_name VARCHAR(255) NOT NULL,
+        quantity INT UNSIGNED NOT NULL,
+        price INT UNSIGNED NOT NULL,
+        total INT UNSIGNED NOT NULL,
+        CONSTRAINT fk_sale_items_sale FOREIGN KEY (sale_id) REFERENCES sales(id) ON DELETE CASCADE,
+        CONSTRAINT fk_sale_items_product FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci');
 
     if ((int) $pdo->query('SELECT COUNT(*) FROM products')->fetchColumn() === 0) {
         $seed = [
